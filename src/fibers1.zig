@@ -1,5 +1,6 @@
 
 // Dynamic Stackless Fibers ( Heap-allocated State Machine )
+//  implementation without POSIX Sockets support - do not spend a bit more RAM when that really no needs (see fibers2.zig for version with POSIX Sockets)
 
 const std = @import("std");
 
@@ -18,7 +19,6 @@ pub const BaseFiber = struct {
     pub const VTable = struct {
         tick: *const fn (ctx: *BaseFiber) anyerror!FiberAction,
         deinit: *const fn (ctx: *BaseFiber) void,
-        get_fd: *const fn (ctx: *BaseFiber) std.posix.socket_t, // for cases like ssl-tls(https) wss, else -1 (when just number_cruncher like factorial example)
     };
 };
 
@@ -53,21 +53,18 @@ pub fn FiberManager(comptime T: type) type {
       const vtable = BaseFiber.VTable{
         .tick = tickWrapper,
         .deinit = deinitWrapper,
-        .get_fd = getFdWrapper,
       };
     }; // end -- const Wrapper = struct {
     
     
     allocator: Allocator,
     fibers: std.ArrayList(*BaseFiber),
-    poll_list: std.ArrayList(std.posix.pollfd),
     
     
     pub fn init(allocator: Allocator) Self {
       return .{
         .allocator = allocator,
         .fibers = std.ArrayList(*BaseFiber).init(allocator),
-        .poll_list = std.ArrayList(std.posix.pollfd).init(allocator),
       };
     }
 
@@ -83,23 +80,14 @@ pub fn FiberManager(comptime T: type) type {
 
     pub fn run(self: *Self) !void {
       while (self.fibers.items.len > 0) {
-        try self.updatePollList();
-        
-        //const timeout: i32 = if (self.hasActiveSockets()) 1 else 0; // waiting for IO (if has sockets) - else just calculate our simple operations-calculations
-        const timeout: i32 = if (self.poll_list.items.len > 0) 1 else 0; // waiting for IO (if has sockets) - else just calculate our simple operations-calculations
-        _ = std.posix.poll(self.poll_list.items, timeout) catch 0;
-        
         var i: usize = 0;
         while (i < self.fibers.items.len) {
           const fiber = self.fibers.items[i];
-          
-          if (self.isReady(fiber, i)) { // call if has_no sockets or when socket is ready
-            const action = fiber.vtable.tick(fiber) catch .close_fiber;
-            if (action == .close_fiber) {
-              fiber.vtable.deinit(fiber);
-              _ = self.fibers.swapRemove(i);
-              continue;
-            }
+          const action = fiber.vtable.tick(fiber) catch .close_fiber;
+          if (action == .close_fiber) {
+            fiber.vtable.deinit(fiber);
+            _ = self.fibers.swapRemove(i);
+            continue;
           }
           i += 1;
         }
@@ -108,36 +96,8 @@ pub fn FiberManager(comptime T: type) type {
       }
     }
 
-
-    fn updatePollList(self: *Self) !void {
-      self.poll_list.clearRetainingCapacity();
-      for (self.fibers.items) |f| {
-        const fd = f.vtable.get_fd(f);
-        if (fd != -1) {
-          try self.poll_list.append(.{ .fd = fd, .events = std.posix.POLL.IN, .revents = 0 });
-        }
-      }
-    }
-
-
-    //fn hasActiveSockets(self: *Self) bool {
-    //  return self.poll_list.items.len > 0;
-    //}
-
-
-    fn isReady(self: *Self, f: *BaseFiber, _: usize) bool {
-      const fd = f.vtable.get_fd(f);
-      if (fd == -1) return true; // task without sockets - always ready
-      for (self.poll_list.items) |pfd| {
-        if (pfd.fd == fd) return pfd.revents != 0;
-      }
-      return false;
-    }
-
-
     pub fn deinit(self: *Self) void {
       self.fibers.deinit();
-      self.poll_list.deinit();
     }
   };
 }

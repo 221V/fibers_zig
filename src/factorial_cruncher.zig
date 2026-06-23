@@ -4,7 +4,7 @@
 const std = @import("std");
 const print = std.debug.print;
 
-const fibers = @import("fibers.zig");
+const fibers = @import("fibers1.zig"); // use version without POSIX Sockets support - do not spend a bit more RAM when that really no needs
 
 
 const FactorialTask = struct {
@@ -19,7 +19,7 @@ const FactorialTask = struct {
         });
     }
 
-    pub fn tick(self: *FactorialTask) anyerror!fibers.FiberAction { // factorial_hepler(n, acc)
+    pub fn tick(self: *FactorialTask) anyerror!fibers.FiberAction { // factorial_helper(n, acc)
         var ops_in_this_tick: usize = 0;
         while (ops_in_this_tick < 2) : (ops_in_this_tick += 1) { // 2 operations per tick
             if (self.n == 0) return .close_fiber;
